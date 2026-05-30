@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdCard } from "@/components/ad-card";
 import { PostAdForm } from "@/components/post-ad-form";
@@ -17,6 +17,46 @@ type FeedRecord = {
 type AdsExplorerProps = {
   initialAds: Advertisement[];
 };
+
+type QuickFilterId = "festival" | "openings" | "branches" | "flash" | "trusted";
+
+const LIVE_TICKER_MESSAGES = [
+  "Festival season live: curated discounts from malls, jewellery showrooms, and food chains.",
+  "New branch announcements and grand opening campaigns are now highlighted in the feed.",
+  "Local job openings are verified by city and displayed by nearest-first discovery.",
+  "Use radius + category controls to discover hyperlocal promotions around your area.",
+];
+
+const QUICK_FILTERS: Array<{ id: QuickFilterId; label: string; blurb: string }> = [
+  {
+    id: "festival",
+    label: "Festival Offers",
+    blurb: "Seasonal campaigns, shopping, and celebration discounts.",
+  },
+  {
+    id: "openings",
+    label: "New Openings",
+    blurb: "Nearby jobs, hiring events, and urgent vacancies.",
+  },
+  {
+    id: "branches",
+    label: "New Branches",
+    blurb: "Brand expansions, new outlets, and launch promotions.",
+  },
+  {
+    id: "flash",
+    label: "Flash Discounts",
+    blurb: "Fast expiring promotions sorted by urgency.",
+  },
+  {
+    id: "trusted",
+    label: "Trusted Local",
+    blurb: "Featured businesses with active local engagement.",
+  },
+];
+
+const INITIAL_VISIBLE_COUNT = 8;
+const LOAD_MORE_STEP = 6;
 
 function nearestCityByCoordinates(latitude: number, longitude: number) {
   return INDIA_CITY_PROFILES.reduce((best, current) => {
@@ -35,6 +75,37 @@ function nearestCityByCoordinates(latitude: number, longitude: number) {
   }, null as null | { city: string; distanceKm: number });
 }
 
+function isBranchCampaign(ad: Advertisement): boolean {
+  const text = `${ad.title} ${ad.description} ${ad.tags.join(" ")}`.toLowerCase();
+  const branchTerms = ["branch", "outlet", "launch", "opening", "showroom", "new store"];
+  return branchTerms.some((term) => text.includes(term));
+}
+
+function isFestivalCampaign(ad: Advertisement): boolean {
+  const text = `${ad.title} ${ad.description} ${ad.tags.join(" ")}`.toLowerCase();
+  const festivalTerms = ["festival", "diwali", "dussehra", "ramzan", "christmas", "new year"];
+  return festivalTerms.some((term) => text.includes(term));
+}
+
+function getTopTags(records: FeedRecord[]): Array<{ tag: string; count: number }> {
+  const counts = new Map<string, number>();
+
+  records.forEach((record) => {
+    record.ad.tags.forEach((tag) => {
+      const normalizedTag = tag.trim().toLowerCase();
+      if (!normalizedTag) {
+        return;
+      }
+      counts.set(normalizedTag, (counts.get(normalizedTag) ?? 0) + 1);
+    });
+  });
+
+  return Array.from(counts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 8);
+}
+
 export function AdsExplorer({ initialAds }: AdsExplorerProps) {
   const [ads, setAds] = useState(initialAds);
   const [selectedCity, setSelectedCity] = useState(DEFAULT_CITY.city);
@@ -44,8 +115,16 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
   const [selectedIntent, setSelectedIntent] = useState<"All" | Advertisement["intent"]>("All");
   const [sortMode, setSortMode] = useState<SortMode>("nearest");
   const [locationStatus, setLocationStatus] = useState<string>("");
+  const [activeQuickFilter, setActiveQuickFilter] = useState<QuickFilterId | "">("");
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
+  const [activeCardId, setActiveCardId] = useState("");
+  const [selectedAd, setSelectedAd] = useState<FeedRecord | null>(null);
 
-  const cityProfile = INDIA_CITY_PROFILES.find((profile) => profile.city === selectedCity) ?? DEFAULT_CITY;
+  const feedScrollerRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+
+  const cityProfile =
+    INDIA_CITY_PROFILES.find((profile) => profile.city === selectedCity) ?? DEFAULT_CITY;
 
   const processedAds = useMemo(() => {
     const loweredSearch = search.trim().toLowerCase();
@@ -94,39 +173,144 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
 
     rows.sort((left, right) => {
       if (sortMode === "latest") {
-        return (
-          new Date(right.ad.createdAt).getTime() -
-          new Date(left.ad.createdAt).getTime()
-        );
+        return right.ad.createdAt.localeCompare(left.ad.createdAt);
       }
 
       if (sortMode === "expiring") {
-        return (
-          new Date(left.ad.validUntil).getTime() -
-          new Date(right.ad.validUntil).getTime()
-        );
+        return left.ad.validUntil.localeCompare(right.ad.validUntil);
       }
 
       return left.distanceKm - right.distanceKm;
     });
 
     return rows;
-  }, [ads, cityProfile.latitude, cityProfile.longitude, radiusKm, selectedCategory, selectedIntent, search, sortMode]);
+  }, [
+    ads,
+    cityProfile.latitude,
+    cityProfile.longitude,
+    radiusKm,
+    search,
+    selectedCategory,
+    selectedIntent,
+    sortMode,
+  ]);
 
-  const topFeatured = processedAds.filter((record) => record.ad.isFeatured).slice(0, 3);
+  const visibleAds = useMemo(
+    () => processedAds.slice(0, Math.min(visibleCount, processedAds.length)),
+    [processedAds, visibleCount],
+  );
+
+  const topFeatured = useMemo(
+    () => processedAds.filter((record) => record.ad.isFeatured).slice(0, 4),
+    [processedAds],
+  );
 
   const stats = useMemo(() => {
     return OFFER_INTENTS.reduce(
       (accumulator, intent) => {
-        accumulator[intent] = processedAds.filter((record) => record.ad.intent === intent).length;
+        accumulator[intent] = processedAds.filter(
+          (record) => record.ad.intent === intent,
+        ).length;
         return accumulator;
       },
       { Job: 0, Discount: 0, Brand: 0 } as Record<Advertisement["intent"], number>,
     );
   }, [processedAds]);
 
+  const topTags = useMemo(() => getTopTags(processedAds), [processedAds]);
+
+  const categoryDistribution = useMemo(
+    () =>
+      AD_CATEGORIES.map((category) => ({
+        category,
+        count: processedAds.filter((record) => record.ad.category === category).length,
+      }))
+        .filter((entry) => entry.count > 0)
+        .sort((left, right) => right.count - left.count),
+    [processedAds],
+  );
+
+  const festivalHighlights = useMemo(
+    () =>
+      processedAds
+        .filter(
+          (record) =>
+            record.ad.intent === "Discount" ||
+            record.ad.isFeatured ||
+            isFestivalCampaign(record.ad),
+        )
+        .slice(0, 10),
+    [processedAds],
+  );
+
+  const branchHighlights = useMemo(
+    () => processedAds.filter((record) => isBranchCampaign(record.ad)).slice(0, 4),
+    [processedAds],
+  );
+
+  const canLoadMore = visibleAds.length < processedAds.length;
+  const currentActiveId = activeCardId || visibleAds[0]?.ad.id || "";
+  const activeRecord = visibleAds.find((record) => record.ad.id === currentActiveId) ?? visibleAds[0];
+
+  function resetFeedWindow() {
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
+    setActiveCardId("");
+  }
+
+  function applyQuickFilter(filterId: QuickFilterId) {
+    setActiveQuickFilter(filterId);
+    resetFeedWindow();
+
+    if (filterId === "festival") {
+      setSelectedIntent("Discount");
+      setSelectedCategory("All");
+      setSearch("festival");
+      setSortMode("expiring");
+      return;
+    }
+
+    if (filterId === "openings") {
+      setSelectedIntent("Job");
+      setSelectedCategory("All");
+      setSearch("");
+      setSortMode("latest");
+      return;
+    }
+
+    if (filterId === "branches") {
+      setSelectedIntent("All");
+      setSelectedCategory("All");
+      setSearch("branch");
+      setSortMode("latest");
+      return;
+    }
+
+    if (filterId === "flash") {
+      setSelectedIntent("Discount");
+      setSelectedCategory("All");
+      setSearch("offer");
+      setSortMode("expiring");
+      return;
+    }
+
+    setSelectedIntent("All");
+    setSelectedCategory("All");
+    setSearch("");
+    setSortMode("nearest");
+  }
+
+  function clearQuickDiscovery() {
+    setActiveQuickFilter("");
+    setSearch("");
+    setSelectedCategory("All");
+    setSelectedIntent("All");
+    setSortMode("nearest");
+    resetFeedWindow();
+  }
+
   function appendAdvertisement(ad: Advertisement) {
     setAds((current) => [ad, ...current]);
+    resetFeedWindow();
   }
 
   function detectLocation() {
@@ -150,8 +334,12 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
         }
 
         setSelectedCity(nearest.city);
+        setActiveQuickFilter("");
+        resetFeedWindow();
         setLocationStatus(
-          `Detected near ${nearest.city} (${nearest.distanceKm.toFixed(1)} km from city center).`,
+          `Detected near ${nearest.city} (${nearest.distanceKm.toFixed(
+            1,
+          )} km from city center).`,
         );
       },
       () => {
@@ -161,15 +349,86 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
     );
   }
 
+  useEffect(() => {
+    const root = feedScrollerRef.current;
+    const sentinel = loadMoreRef.current;
+
+    if (!root || !sentinel || !canLoadMore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0];
+        if (!first?.isIntersecting) {
+          return;
+        }
+
+        setVisibleCount((current) =>
+          Math.min(current + LOAD_MORE_STEP, processedAds.length),
+        );
+      },
+      {
+        root,
+        rootMargin: "220px 0px 160px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [canLoadMore, processedAds.length]);
+
+  useEffect(() => {
+    const root = feedScrollerRef.current;
+
+    if (!root || visibleAds.length === 0) {
+      return;
+    }
+
+    const cards = Array.from(root.querySelectorAll<HTMLElement>("[data-ad-id]"));
+    if (cards.length === 0) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visibleEntries = entries.filter((entry) => entry.isIntersecting);
+        if (visibleEntries.length === 0) {
+          return;
+        }
+
+        const topEntry = visibleEntries.reduce((best, candidate) =>
+          candidate.intersectionRatio > best.intersectionRatio ? candidate : best,
+        );
+
+        const candidateId = (topEntry.target as HTMLElement).dataset.adId;
+        if (candidateId) {
+          setActiveCardId(candidateId);
+        }
+      },
+      {
+        root,
+        threshold: [0.35, 0.6, 0.85],
+      },
+    );
+
+    cards.forEach((card) => observer.observe(card));
+
+    return () => observer.disconnect();
+  }, [visibleAds]);
+
   return (
     <div className="ads-shell">
       <section className="hero-panel">
-        <p className="kicker">India-First Hyperlocal Advertising Network</p>
-        <h1>BharatAd Pulse</h1>
-        <p className="hero-copy">
-          Discover nearby job openings, food deals, shopping discounts, jewellery promotions,
-          and trusted local business campaigns in Indian cities.
-        </p>
+        <div>
+          <p className="kicker">India-First Hyperlocal Advertising Network</p>
+          <h1>BharatAd Pulse</h1>
+          <p className="hero-copy">
+            Local advertising platform for nearby offers, new job openings, special discounts,
+            and new branch campaigns. Built for Indian city-level discovery and high engagement.
+          </p>
+        </div>
 
         <div className="stats-row">
           <article>
@@ -178,16 +437,24 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
           </article>
           <article>
             <span>{stats.Job}</span>
-            <p>Nearby jobs</p>
+            <p>Active job openings</p>
           </article>
           <article>
             <span>{stats.Discount}</span>
-            <p>Discount offers</p>
+            <p>Discount campaigns</p>
           </article>
           <article>
             <span>{stats.Brand}</span>
-            <p>Brand campaigns</p>
+            <p>Brand promotions</p>
           </article>
+        </div>
+      </section>
+
+      <section className="ticker-panel" aria-label="Live local campaign stream">
+        <div className="ticker-track">
+          {[...LIVE_TICKER_MESSAGES, ...LIVE_TICKER_MESSAGES].map((message, index) => (
+            <p key={`ticker-${index}`}>{message}</p>
+          ))}
         </div>
       </section>
 
@@ -195,7 +462,14 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
         <div className="control-line">
           <label>
             City
-            <select value={selectedCity} onChange={(event) => setSelectedCity(event.target.value)}>
+            <select
+              value={selectedCity}
+              onChange={(event) => {
+                setSelectedCity(event.target.value);
+                setActiveQuickFilter("");
+                resetFeedWindow();
+              }}
+            >
               {INDIA_CITY_PROFILES.map((city) => (
                 <option key={city.city} value={city.city}>
                   {city.city}
@@ -208,7 +482,11 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
             Category
             <select
               value={selectedCategory}
-              onChange={(event) => setSelectedCategory(event.target.value as typeof selectedCategory)}
+              onChange={(event) => {
+                setSelectedCategory(event.target.value as typeof selectedCategory);
+                setActiveQuickFilter("");
+                resetFeedWindow();
+              }}
             >
               <option value="All">All</option>
               {AD_CATEGORIES.map((category) => (
@@ -223,7 +501,11 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
             Type
             <select
               value={selectedIntent}
-              onChange={(event) => setSelectedIntent(event.target.value as typeof selectedIntent)}
+              onChange={(event) => {
+                setSelectedIntent(event.target.value as typeof selectedIntent);
+                setActiveQuickFilter("");
+                resetFeedWindow();
+              }}
             >
               <option value="All">All</option>
               {OFFER_INTENTS.map((intent) => (
@@ -236,7 +518,14 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
 
           <label>
             Sort
-            <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
+            <select
+              value={sortMode}
+              onChange={(event) => {
+                setSortMode(event.target.value as SortMode);
+                setActiveQuickFilter("");
+                resetFeedWindow();
+              }}
+            >
               <option value="nearest">Nearest</option>
               <option value="latest">Latest</option>
               <option value="expiring">Expiring soon</option>
@@ -253,7 +542,10 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
               max={1500}
               step={10}
               value={radiusKm}
-              onChange={(event) => setRadiusKm(Number(event.target.value))}
+              onChange={(event) => {
+                setRadiusKm(Number(event.target.value));
+                resetFeedWindow();
+              }}
             />
           </label>
 
@@ -261,8 +553,12 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
             Search
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search by business, city, tags, or offer"
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setActiveQuickFilter("");
+                resetFeedWindow();
+              }}
+              placeholder="Search by business, city, tags, festival, branch, hiring"
             />
           </label>
 
@@ -274,11 +570,33 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
         {locationStatus ? <p className="location-status">{locationStatus}</p> : null}
       </section>
 
+      <section className="quick-filter-panel">
+        <div className="quick-filter-header">
+          <h2>Instant Discovery</h2>
+          <button type="button" className="ghost-btn small" onClick={clearQuickDiscovery}>
+            Reset
+          </button>
+        </div>
+        <div className="quick-filter-list">
+          {QUICK_FILTERS.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              className={`quick-filter-chip ${activeQuickFilter === filter.id ? "is-active" : ""}`}
+              onClick={() => applyQuickFilter(filter.id)}
+            >
+              <span>{filter.label}</span>
+              <p>{filter.blurb}</p>
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="featured-strip">
         <h2>Festival Spotlight</h2>
-        <div className="featured-list">
-          {topFeatured.length ? (
-            topFeatured.map((record) => (
+        <div className="featured-list rail">
+          {festivalHighlights.length ? (
+            festivalHighlights.map((record) => (
               <article key={`spot-${record.ad.id}`}>
                 <h3>{record.ad.title}</h3>
                 <p>
@@ -295,22 +613,133 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
         </div>
       </section>
 
-      <section className="content-grid">
-        <div className="feed-panel">
-          <h2>Nearby Advertisement Feed</h2>
-          <p>
-            {processedAds.length} active ads around {selectedCity}. Updated for jobs, offers, and local promotions.
-          </p>
-          <div className="ads-grid">
-            {processedAds.map((record) => (
-              <AdCard key={record.ad.id} ad={record.ad} distanceKm={record.distanceKm} />
+      <section className="insight-grid">
+        <article>
+          <h3>Top Categories in {selectedCity}</h3>
+          <div className="insight-items">
+            {categoryDistribution.slice(0, 5).map((item) => (
+              <p key={item.category}>
+                <span>{item.category}</span>
+                <strong>{item.count}</strong>
+              </p>
             ))}
           </div>
+        </article>
+
+        <article>
+          <h3>Trending Tags</h3>
+          <div className="tag-cloud">
+            {topTags.length ? (
+              topTags.map((item) => (
+                <button
+                  key={item.tag}
+                  type="button"
+                  onClick={() => {
+                    setSearch(item.tag);
+                    setActiveQuickFilter("");
+                    resetFeedWindow();
+                  }}
+                >
+                  #{item.tag} ({item.count})
+                </button>
+              ))
+            ) : (
+              <p>No trending tags yet in this radius.</p>
+            )}
+          </div>
+        </article>
+
+        <article>
+          <h3>Branch & Launch Highlights</h3>
+          <div className="insight-items concise">
+            {(branchHighlights.length ? branchHighlights : topFeatured).slice(0, 4).map((record) => (
+              <p key={`branch-${record.ad.id}`}>
+                <span>{record.ad.businessName}</span>
+                <strong>{record.ad.city}</strong>
+              </p>
+            ))}
+          </div>
+        </article>
+      </section>
+
+      <section className="content-grid">
+        <div className="feed-panel">
+          <div className="feed-header">
+            <div>
+              <h2>Nearby Advertisement Feed</h2>
+              <p>
+                Scroll through live ads for offers, openings, and local campaigns around {selectedCity}.
+              </p>
+            </div>
+            {activeRecord ? (
+              <aside className="active-ad-pulse">
+                <p>Now Viewing</p>
+                <h3>{activeRecord.ad.businessName}</h3>
+                <span>
+                  {activeRecord.ad.city} · {activeRecord.distanceKm.toFixed(1)} km
+                </span>
+              </aside>
+            ) : null}
+          </div>
+
+          <div className="ads-grid scroll-mode" ref={feedScrollerRef}>
+            {visibleAds.map((record, index) => (
+              <div key={record.ad.id} data-ad-id={record.ad.id} className="feed-item">
+                <AdCard
+                  ad={record.ad}
+                  distanceKm={record.distanceKm}
+                  sequence={index + 1}
+                  isActive={currentActiveId === record.ad.id}
+                  onOpen={() => setSelectedAd(record)}
+                />
+              </div>
+            ))}
+            <div ref={loadMoreRef} className="feed-sentinel" />
+          </div>
+
+          {canLoadMore ? (
+            <p className="load-hint">Loading more advertisements as you scroll...</p>
+          ) : (
+            <p className="load-hint">You have reached the end of the current feed.</p>
+          )}
         </div>
 
         <PostAdForm onPublished={appendAdvertisement} />
       </section>
+
+      {selectedAd ? (
+        <div className="details-modal" role="dialog" aria-modal="true" aria-label="Advertisement details">
+          <div className="details-card">
+            <button className="close-modal" type="button" onClick={() => setSelectedAd(null)}>
+              Close
+            </button>
+            <h2>{selectedAd.ad.title}</h2>
+            <p>{selectedAd.ad.description}</p>
+            <div className="detail-metrics">
+              <span>Business: {selectedAd.ad.businessName}</span>
+              <span>Location: {selectedAd.ad.city}, {selectedAd.ad.state}</span>
+              <span>Distance: {selectedAd.distanceKm.toFixed(1)} km</span>
+              <span>Contact: {selectedAd.ad.contactPhone}</span>
+              <span>Valid Until: {selectedAd.ad.validUntil}</span>
+            </div>
+            <div className="ad-actions">
+              <a href={`tel:${selectedAd.ad.contactPhone}`} className="ad-contact">
+                Call Now
+              </a>
+              {selectedAd.ad.websiteUrl ? (
+                <a
+                  href={selectedAd.ad.websiteUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ad-contact ghost"
+                >
+                  Visit Website
+                </a>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
-
