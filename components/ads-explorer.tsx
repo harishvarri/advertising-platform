@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -310,6 +310,12 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
 
   function appendAdvertisement(ad: Advertisement) {
     setAds((current) => [ad, ...current]);
+    setSelectedCity(ad.city);
+    setSelectedCategory("All");
+    setSelectedIntent("All");
+    setSearch("");
+    setActiveQuickFilter("");
+    setSortMode("latest");
     resetFeedWindow();
   }
 
@@ -564,6 +570,17 @@ export function AdsExplorer({ initialAds }: AdsExplorerProps) {
 
           <button className="ghost-btn" type="button" onClick={detectLocation}>
             Detect My City
+          </button>
+
+          <button
+            className="ghost-btn"
+            style={{ borderColor: "#ffbaba", color: "#a94442", backgroundColor: "#f2dede" }}
+            type="button"
+            onClick={() => {
+              throw new Error("Sample Test Error: Analytics integration verification");
+            }}
+          >
+            Trigger Test Error
           </button>
         </div>
 
