@@ -1,6 +1,8 @@
 ﻿import type { Metadata } from "next";
-import { Poppins, Sora } from "next/font/google";
+import Script from "next/script";
 
+import { Poppins, Sora } from "next/font/google";
+import { NcplIdentify } from './components/ncpl-identify';
 import "./globals.css";
 
 const poppins = Poppins({
