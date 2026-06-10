@@ -1,8 +1,8 @@
-﻿import type { Metadata } from "next";
+import type { Metadata } from "next";
 import Script from "next/script";
 
 import { Poppins, Sora } from "next/font/google";
-import { NcplIdentify } from './components/ncpl-identify';
+import { NcplIdentify } from "@/components/ncpl-identify";
 import "./globals.css";
 
 const poppins = Poppins({
@@ -34,10 +34,11 @@ export default function RootLayout({
           <Script
           src="https://analytics-tool-web.vercel.app/ncpl.js"
           data-project="advertising"
-          data-key="ncpl_pk_q6OCW0BDVA6v8kQkdAAa7Nb1RuK3GR4b"
+          data-key="ncpl_pk_q60CW0BDVA6v8KQkDAaa7Nb1RuK3GR4b"
           strategy="afterInteractive"
         /></body>
     </html>
   );
 }
+
 
