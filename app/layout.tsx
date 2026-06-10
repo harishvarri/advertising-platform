@@ -34,7 +34,7 @@ export default function RootLayout({
           <Script
           src="https://analytics-tool-web.vercel.app/ncpl.js"
           data-project="advertising"
-          data-key="ncpl_pk_q60CW0BDVA6v8KQkDAaa7Nb1RuK3GR4b"
+          data-key="ncpl_pk_q6OCW0BDVA6v8kQkdAAa7Nb1RuK3GR4b"
           strategy="afterInteractive"
         /></body>
     </html>
