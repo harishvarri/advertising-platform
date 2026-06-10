@@ -28,7 +28,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${poppins.variable} ${sora.variable}`}>
-      <body>{children}</body>
+      <body>{children}
+          <Script
+          src="https://analytics-tool-web.vercel.app/ncpl.js"
+          data-project="advertising"
+          data-key="ncpl_pk_q6OCW0BDVA6v8kQkdAAa7Nb1RuK3GR4b"
+          strategy="afterInteractive"
+        /></body>
     </html>
   );
 }
